@@ -7241,7 +7241,7 @@ static void bpf_overflow_handler(struct perf_event *event,
 	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1))
 		goto out;
 	rcu_read_lock();
-	ret = BPF_PROG_RUN(event->prog, &ctx);
+	ret = BPF_PROG_RUN(event->prog, (void *)&ctx);
 	rcu_read_unlock();
 out:
 	__this_cpu_dec(bpf_prog_active);
@@ -7299,10 +7299,6 @@ static int perf_event_set_bpf_prog(struct perf_event *event, u32 prog_fd)
 	bool is_kprobe, is_tracepoint;
 	struct bpf_prog *prog;
 	int ret;
-
-	if (event->attr.type == PERF_TYPE_HARDWARE ||
-	    event->attr.type == PERF_TYPE_SOFTWARE)
-		return perf_event_set_bpf_handler(event, prog_fd);
 
 	if (event->attr.type == PERF_TYPE_HARDWARE ||
 	    event->attr.type == PERF_TYPE_SOFTWARE)

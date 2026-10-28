@@ -65,7 +65,7 @@ struct jit_ctx {
 	int idx;
 	int epilogue_offset;
 	int *offset;
-	u32 *image;
+	__le32 *image;
 };
 
 static inline void emit(const u32 insn, struct jit_ctx *ctx)
@@ -125,7 +125,7 @@ static inline int bpf2a64_offset(int bpf_to, int bpf_from,
 
 static void jit_fill_hole(void *area, unsigned int size)
 {
-	u32 *ptr;
+	__le32 *ptr;
 	/* We are guaranteed to have aligned memory. */
 	for (ptr = area; size >= sizeof(u32); size -= sizeof(u32))
 		*ptr++ = cpu_to_le32(AARCH64_BREAK_FAULT);
@@ -521,10 +521,14 @@ emit_bswap_uxt:
 	/* IF (dst COND src) JUMP off */
 	case BPF_JMP | BPF_JEQ | BPF_X:
 	case BPF_JMP | BPF_JGT | BPF_X:
+	case BPF_JMP | BPF_JLT | BPF_X:
 	case BPF_JMP | BPF_JGE | BPF_X:
+	case BPF_JMP | BPF_JLE | BPF_X:
 	case BPF_JMP | BPF_JNE | BPF_X:
 	case BPF_JMP | BPF_JSGT | BPF_X:
+	case BPF_JMP | BPF_JSLT | BPF_X:
 	case BPF_JMP | BPF_JSGE | BPF_X:
+	case BPF_JMP | BPF_JSLE | BPF_X:
 		emit(A64_CMP(1, dst, src), ctx);
 emit_cond_jmp:
 		jmp_offset = bpf2a64_offset(i + off, i, ctx);
@@ -536,8 +540,14 @@ emit_cond_jmp:
 		case BPF_JGT:
 			jmp_cond = A64_COND_HI;
 			break;
+		case BPF_JLT:
+			jmp_cond = A64_COND_CC;
+			break;
 		case BPF_JGE:
 			jmp_cond = A64_COND_CS;
+			break;
+		case BPF_JLE:
+			jmp_cond = A64_COND_LS;
 			break;
 		case BPF_JSET:
 		case BPF_JNE:
@@ -546,8 +556,14 @@ emit_cond_jmp:
 		case BPF_JSGT:
 			jmp_cond = A64_COND_GT;
 			break;
+		case BPF_JSLT:
+			jmp_cond = A64_COND_LT;
+			break;
 		case BPF_JSGE:
 			jmp_cond = A64_COND_GE;
+			break;
+		case BPF_JSLE:
+			jmp_cond = A64_COND_LE;
 			break;
 		default:
 			return -EFAULT;
@@ -560,10 +576,14 @@ emit_cond_jmp:
 	/* IF (dst COND imm) JUMP off */
 	case BPF_JMP | BPF_JEQ | BPF_K:
 	case BPF_JMP | BPF_JGT | BPF_K:
+	case BPF_JMP | BPF_JLT | BPF_K:
 	case BPF_JMP | BPF_JGE | BPF_K:
+	case BPF_JMP | BPF_JLE | BPF_K:
 	case BPF_JMP | BPF_JNE | BPF_K:
 	case BPF_JMP | BPF_JSGT | BPF_K:
+	case BPF_JMP | BPF_JSLT | BPF_K:
 	case BPF_JMP | BPF_JSGE | BPF_K:
+	case BPF_JMP | BPF_JSLE | BPF_K:
 		emit_a64_mov_i(1, tmp, imm, ctx);
 		emit(A64_CMP(1, dst, tmp), ctx);
 		goto emit_cond_jmp;
@@ -583,7 +603,7 @@ emit_cond_jmp:
 		break;
 	}
 	/* tail call */
-	case BPF_JMP | BPF_CALL | BPF_X:
+	case BPF_JMP | BPF_TAIL_CALL:
 		if (emit_bpf_tail_call(ctx))
 			return -EFAULT;
 		break;
@@ -686,11 +706,14 @@ emit_cond_jmp:
 			break;
 		}
 		break;
+
 	/* STX XADD: lock *(u32 *)(dst + off) += src */
 	case BPF_STX | BPF_XADD | BPF_W:
 	/* STX XADD: lock *(u64 *)(dst + off) += src */
 	case BPF_STX | BPF_XADD | BPF_DW:
-		goto notyet;
+		/* No exclusive load/store helpers: skip JIT for the whole program */
+		pr_info_once("*** NOT YET: opcode %02x ***\n", code);
+		return -EFAULT;
 
 	/* R0 = ntohx(*(size *)(((struct sk_buff *)R6)->data + imm)) */
 	case BPF_LD | BPF_ABS | BPF_W:
@@ -757,10 +780,6 @@ emit_cond_jmp:
 		}
 		break;
 	}
-notyet:
-		pr_info_once("*** NOT YET: opcode %02x ***\n", code);
-		return -EFAULT;
-
 	default:
 		pr_err_once("unknown opcode %02x\n", code);
 		return -EINVAL;
@@ -872,7 +891,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 
 	/* 2. Now, the actual pass. */
 
-	ctx.image = (u32 *)image_ptr;
+	ctx.image = (__le32 *)image_ptr;
 	ctx.idx = 0;
 
 	build_prologue(&ctx);
@@ -901,7 +920,6 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	set_memory_ro((unsigned long)header, header->pages);
 	prog->bpf_func = (void *)ctx.image;
 	prog->jited = 1;
-	prog->jited_len = image_size;
 
 out_off:
 	kfree(ctx.offset);
@@ -910,6 +928,21 @@ out:
 		bpf_jit_prog_release_other(prog, prog == orig_prog ?
 					   tmp : orig_prog);
 	return prog;
+}
+
+void bpf_jit_free(struct bpf_prog *prog)
+{
+	unsigned long addr = (unsigned long)prog->bpf_func & PAGE_MASK;
+	struct bpf_binary_header *header = (void *)addr;
+
+	if (!prog->jited)
+		goto free_filter;
+
+	set_memory_rw(addr, header->pages);
+	bpf_jit_binary_free(header);
+
+free_filter:
+	bpf_prog_unlock_free(prog);
 }
 
 #ifdef CONFIG_CFI_CLANG
