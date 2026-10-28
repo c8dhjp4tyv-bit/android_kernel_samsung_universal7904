@@ -47,7 +47,7 @@
 	};
 
 	chosen {
-		bootargs = "console=ram root=/dev/ram0 clk_ignore_unused androidboot.hardware=samsungexynos7885 androidboot.selinux=permissive ess_setup=0x86000000 androidboot.debug_level=0x4948";
+		bootargs = "console=ram root=/dev/ram0 clk_ignore_unused androidboot.hardware=samsungexynos7885 androidboot.selinux=enforcing ess_setup=0x86000000 androidboot.debug_level=0x4948";
 		linux,initrd-start = <0x84000000>;
 		linux,initrd-end = <0x840FFFFF>;
 	};
