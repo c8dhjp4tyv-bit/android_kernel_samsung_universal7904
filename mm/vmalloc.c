@@ -1172,7 +1172,7 @@ void set_iounmap_nonlazy(void)
  * Returns with *start = min(*start, lowest purged address)
  *              *end = max(*end, highest purged address)
  */
-static bool __purge_vmap_area_lazy(unsigned long *start, unsigned long *end,
+static void __purge_vmap_area_lazy(unsigned long *start, unsigned long *end,
 					int sync, int force_flush)
 {
 	static DEFINE_SPINLOCK(purge_lock);
@@ -1188,7 +1188,7 @@ static bool __purge_vmap_area_lazy(unsigned long *start, unsigned long *end,
 	 */
 	if (!sync && !force_flush) {
 		if (!spin_trylock(&purge_lock))
-			return 0;
+			return;
 	} else
 		spin_lock(&purge_lock);
 
@@ -1295,15 +1295,6 @@ static struct vmap_area *find_vmap_area(unsigned long addr)
 	spin_unlock(&vmap_area_lock);
 
 	return va;
-}
-
-static void free_unmap_vmap_area_addr(unsigned long addr)
-{
-	struct vmap_area *va;
-
-	va = find_vmap_area(addr);
-	BUG_ON(!va);
-	free_unmap_vmap_area(va);
 }
 
 
@@ -1679,14 +1670,17 @@ void vm_unmap_ram(const void *mem, unsigned int count)
 	BUG_ON(addr > VMALLOC_END);
 	BUG_ON(addr & (PAGE_SIZE-1));
 
-	if (likely(count <= VMAP_MAX_ALLOC))
+	if (likely(count <= VMAP_MAX_ALLOC)) {
 		debug_check_no_locks_freed(mem, size);
 		vb_free(mem, size);
 		return;
+	}
 
-	free_unmap_vmap_area_addr(addr);
+	va = find_vmap_area(addr);
+	BUG_ON(!va);
 	debug_check_no_locks_freed((void *)va->va_start,
-			    	(va->va_end - va->va_start));
+				    (va->va_end - va->va_start));
+	free_unmap_vmap_area(va);
 }
 EXPORT_SYMBOL(vm_unmap_ram);
 
